@@ -256,11 +256,15 @@ public final class BlockMetaCodec {
     }
 
     public static byte[] fromLegacy(byte[] serialized) throws IOException, ClassNotFoundException {
-        return encode(LegacyBlockMetaCodec.decode(serialized));
+        return encode(LegacyMetadataCodec.decode(serialized));
+    }
+
+    public static List<Object> decodeLegacy(byte[] serialized) throws IOException, ClassNotFoundException {
+        return LegacyMetadataCodec.decodeRuntime(serialized);
     }
 
     public static byte[] toLegacy(byte[] encoded) throws IOException, ClassNotFoundException {
-        return LegacyBlockMetaCodec.encode(decode(encoded, false));
+        return LegacyMetadataCodec.encode(decode(encoded, false));
     }
 
     public static boolean isEncoded(byte[] data) {
@@ -273,7 +277,7 @@ public final class BlockMetaCodec {
         if (!metadata.isEmpty()) {
             boolean command = true;
             for (Object value : metadata) {
-                if (!(value instanceof String)) {
+                if (!(value instanceof String) && !(value instanceof LegacyMetadataCodec.RegistryValue)) {
                     command = false;
                     break;
                 }
@@ -320,7 +324,8 @@ public final class BlockMetaCodec {
     private static void encodeCommand(BinaryOutput output, List<Object> metadata) {
         output.writeLength(metadata.size());
         for (Object value : metadata) {
-            output.writeString((String) value);
+            output.writeString(value instanceof LegacyMetadataCodec.RegistryValue
+                    ? ((LegacyMetadataCodec.RegistryValue) value).key() : (String) value);
         }
     }
 
@@ -421,8 +426,8 @@ public final class BlockMetaCodec {
             output.write(STRING);
             output.writeString(value.toString());
         }
-        else if (value instanceof LegacyBlockMetaCodec.ConfigurationValue) {
-            LegacyBlockMetaCodec.ConfigurationValue configuration = (LegacyBlockMetaCodec.ConfigurationValue) value;
+        else if (value instanceof LegacyMetadataCodec.ConfigurationValue) {
+            LegacyMetadataCodec.ConfigurationValue configuration = (LegacyMetadataCodec.ConfigurationValue) value;
             output.write(CONFIGURATION);
             output.writeString(configuration.alias());
             encodeStringMapBody(output, configuration.values(), depth);
@@ -433,6 +438,10 @@ public final class BlockMetaCodec {
         else if (value instanceof Keyed || value instanceof Sound || value instanceof PotionEffectType) {
             output.write(STRING);
             output.writeString(registryKey(value));
+        }
+        else if (value instanceof LegacyMetadataCodec.RegistryValue) {
+            output.write(STRING);
+            output.writeString(((LegacyMetadataCodec.RegistryValue) value).key());
         }
         else if (value instanceof Enum<?>) {
             encodeEnum(output, (Enum<?>) value);
@@ -988,7 +997,7 @@ public final class BlockMetaCodec {
                     String alias = readString();
                     Map<String, Object> serialized = readStringMapBody(depth);
                     return resolveConfigurations ? parseConfigurationValue(alias, serialized)
-                            : new LegacyBlockMetaCodec.ConfigurationValue(alias, serialized);
+                            : new LegacyMetadataCodec.ConfigurationValue(alias, serialized);
                 case ENUM:
                     return parseEnum(readString(), readString());
                 case DOUBLE_ZERO:
