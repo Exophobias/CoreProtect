@@ -32,7 +32,7 @@ public class TabHandler implements TabCompleter {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command cmd, String label, String[] args) {
-        if (!(sender instanceof Player) || args.length == 0) {
+        if (args.length == 0) {
             return null;
         }
 
@@ -44,11 +44,16 @@ public class TabHandler implements TabCompleter {
         String currentArg = args[args.length - 1].toLowerCase(Locale.ROOT).trim();
         String lastArg = args.length > 1 ? args[args.length - 2].toLowerCase(Locale.ROOT).trim() : "";
 
+        if (argument0.equals("help")) {
+            return StringUtil.copyPartialMatches(currentArg, HelpCommand.helpOptions(sender), new ArrayList<>());
+        }
+        if (!commandPermitted(sender, argument0)) return new ArrayList<>();
+
         ParamState paramState = getParamState(sender, args);
 
         // Handle param-specific completions
         if (isActionParam(lastArg, currentArg) && hasLookupPermission(sender)) {
-            return handleActionParamCompletions(currentArg, lastArg);
+            return handleActionParamCompletions(sender, argument0, currentArg, lastArg);
         }
         else if (isUserParam(lastArg, currentArg) && hasLookupPermission(sender)) {
             return handleUserParamCompletions(currentArg, lastArg);
@@ -78,6 +83,25 @@ public class TabHandler implements TabCompleter {
         return Arrays.asList("");
     }
 
+    private boolean commandPermitted(CommandSender sender, String command) {
+        switch (command) {
+            case "lookup": case "l": case "page": return sender.hasPermission("coreprotect.lookup");
+            case "near": return sender.hasPermission("coreprotect.lookup.near");
+            case "rollback": case "rb": case "ro": return sender.hasPermission("coreprotect.rollback");
+            case "restore": case "rs": case "re": case "undo": return sender.hasPermission("coreprotect.restore");
+            case "purge": return sender.hasPermission("coreprotect.purge");
+            case "inspect": case "i": case "inspector": return sender.hasPermission("coreprotect.inspect");
+            case "teleport": case "tp": return sender.hasPermission("coreprotect.teleport");
+            case "reload": return sender.hasPermission("coreprotect.reload");
+            case "status": case "stats": case "version": return sender.hasPermission("coreprotect.status");
+            case "apply": case "cancel": return HelpCommand.permitted(sender, "rollback|restore");
+            case "consumer": return sender.hasPermission("coreprotect.consumer");
+            case "network-debug": return sender.hasPermission("coreprotect.networking");
+            case "give": return sender.hasPermission("coreprotect.give");
+            default: return false;
+        }
+    }
+
     private List<String> getFirstLevelCompletions(CommandSender sender, String argument) {
         String arg = argument.toLowerCase(Locale.ROOT);
         List<String> completions = new ArrayList<>();
@@ -92,6 +116,14 @@ public class TabHandler implements TabCompleter {
         addCompletionIfPermitted(sender, "coreprotect.status", "status", completions);
         addCompletionIfPermitted(sender, "coreprotect.lookup.near", "near", completions);
         addCompletionIfPermitted(sender, "coreprotect.restore", "undo", completions);
+        addCompletionIfPermitted(sender, "coreprotect.teleport", "teleport", completions);
+        addCompletionIfPermitted(sender, "coreprotect.consumer", "consumer", completions);
+        addCompletionIfPermitted(sender, "coreprotect.networking", "network-debug", completions);
+        addCompletionIfPermitted(sender, "coreprotect.give", "give", completions);
+        if (HelpCommand.permitted(sender, "rollback|restore")) {
+            completions.add("apply");
+            completions.add("cancel");
+        }
 
         return StringUtil.copyPartialMatches(arg, completions, new ArrayList<>(completions.size()));
     }
@@ -233,7 +265,7 @@ public class TabHandler implements TabCompleter {
         return state;
     }
 
-    private List<String> handleActionParamCompletions(String currentArg, String lastArg) {
+    private List<String> handleActionParamCompletions(CommandSender sender, String command, String currentArg, String lastArg) {
         String arg = "";
         String filter = lastArg;
 
@@ -245,7 +277,10 @@ public class TabHandler implements TabCompleter {
             }
         }
 
-        List<String> completions = new ArrayList<>(Arrays.asList(ACTIONS));
+        List<String> completions = Arrays.stream(ACTIONS)
+                .filter(action -> !(command.equals("lookup") || command.equals("l"))
+                        || sender.hasPermission("coreprotect.lookup." + action.replace("+", "").replace("-", "")))
+                .collect(Collectors.toList());
         for (int index = 0; index < completions.size(); index++) {
             completions.set(index, filter + completions.get(index));
         }
@@ -443,11 +478,11 @@ public class TabHandler implements TabCompleter {
         String argument1 = cmd1.toLowerCase(Locale.ROOT);
 
         if (argument0.equals("help") && sender.hasPermission("coreprotect.help")) {
-            List<String> completions = new ArrayList<>(Arrays.asList(HELP));
+            List<String> completions = HelpCommand.helpOptions(sender);
             return StringUtil.copyPartialMatches(argument1, completions, new ArrayList<>(completions.size()));
         }
         else if (argument0.equals("purge") && sender.hasPermission("coreprotect.purge")) {
-            List<String> completions = new ArrayList<>(Arrays.asList("t:", "r:", "i:"));
+            List<String> completions = new ArrayList<>(Arrays.asList("t:", "r:", "i:", "e:", "a:kill"));
             return StringUtil.copyPartialMatches(argument1, completions, new ArrayList<>(completions.size()));
         }
         else if (hasLookupCommand(argument0, sender)) {
@@ -464,10 +499,10 @@ public class TabHandler implements TabCompleter {
         String argument2 = arg2.toLowerCase(Locale.ROOT);
 
         if (argument1.startsWith("t:")) {
-            List<String> completions = new ArrayList<>(Arrays.asList("r:", "i:"));
+            List<String> completions = new ArrayList<>(Arrays.asList("r:", "i:", "e:", "a:kill"));
             return StringUtil.copyPartialMatches(argument2, completions, new ArrayList<>(completions.size()));
         }
-        else if (argument1.startsWith("r:") || argument1.startsWith("i:")) {
+        else if (argument1.startsWith("r:") || argument1.startsWith("i:") || argument1.startsWith("e:") || argument1.startsWith("a:")) {
             List<String> completions = new ArrayList<>(Arrays.asList("t:"));
             return StringUtil.copyPartialMatches(argument2, completions, new ArrayList<>(completions.size()));
         }
