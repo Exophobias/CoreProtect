@@ -41,7 +41,6 @@ import net.coreprotect.paper.PaperAdapter;
 import net.coreprotect.thread.Scheduler;
 import net.coreprotect.utility.Chat;
 import net.coreprotect.utility.EntitySpawnTracking;
-import net.coreprotect.utility.EntityUtils;
 import net.coreprotect.utility.ErrorReporter;
 import net.coreprotect.utility.ItemUtils;
 import net.coreprotect.utility.MaterialUtils;
@@ -101,7 +100,7 @@ public final class EntitySpawnRollbackHandler {
             if (rollbackType == 0 && record.isRemoved()) {
                 pairedKillRows.add(record.getKillRowId());
                 List<Object> data = killData.get(record.getKillRowId());
-                EntityType type = EntityUtils.getEntityType((Integer) killRow[6]);
+                EntityType type = EntitySpawnTracking.resolveKillType((Integer) killRow[6], data);
                 Location location = getRowLocation(killRow);
                 if (location != null && EntitySpawnTracking.isPlacedEntityType(type)) {
                     Location exactLocation = EntitySpawnTracking.getKillRestoreLocation(location.getWorld(), data);
@@ -170,7 +169,7 @@ public final class EntitySpawnRollbackHandler {
             }
             else {
                 Location location = record.getLocation();
-                EntityType type = EntityUtils.getEntityType((Integer) row[6]);
+                EntityType type = EntitySpawnTracking.resolveSpawnType((Integer) row[6], record.getState());
                 if (record.getState() == null || location == null || type == null || type == EntityType.UNKNOWN) {
                     continue;
                 }
@@ -195,7 +194,7 @@ public final class EntitySpawnRollbackHandler {
             List<Object[]> transactions = containerRowsByTrackingId.getOrDefault(record.getRowId(), Collections.emptyList());
             if (rollbackType == 0) {
                 List<Object> data = killData.get(killRowId);
-                EntityType type = EntityUtils.getEntityType((Integer) row[6]);
+                EntityType type = EntitySpawnTracking.resolveKillType((Integer) row[6], data);
                 Location location = getRowLocation(row);
                 if (location != null && EntitySpawnTracking.isPlacedEntityType(type)) {
                     Location exactLocation = EntitySpawnTracking.getKillRestoreLocation(location.getWorld(), data);
@@ -711,6 +710,7 @@ public final class EntitySpawnRollbackHandler {
                 }
                 if (entity == null) {
                     context.reportFailure("Entity restoration did not return an entity", work);
+                    context.cancel();
                     completion.complete(false);
                     context.endMutation();
                     return;
@@ -784,7 +784,7 @@ public final class EntitySpawnRollbackHandler {
                     EntitySpawnTracking.removeWithoutRemovalLog(entity);
                 }
                 EntitySpawnTracking.forget(entity.getUniqueId());
-                completion.complete(context.compositeTransition(work, transition, 2));
+                completion.complete(context.transition(work, transition, 2));
                 return completion;
             }
 
@@ -1407,9 +1407,11 @@ public final class EntitySpawnRollbackHandler {
         private final List<CompletableFuture<Boolean>> pending = new ArrayList<>();
         private final Deque<TransactionWork> transactionWaiters = new ArrayDeque<>();
         private final AtomicInteger items = new AtomicInteger();
+        private final AtomicInteger blocks = new AtomicInteger();
         private final AtomicInteger entities = new AtomicInteger();
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean failureReported = new AtomicBoolean();
+        private Map<Integer, List<Object>> legacyKillData = Collections.emptyMap();
         private int activeMutations;
         private boolean transactionWorkActive;
         private boolean transactionWorkAdvancing;
@@ -1472,6 +1474,36 @@ public final class EntitySpawnRollbackHandler {
             return items.get();
         }
 
+        int getBlockCount() {
+            return blocks.get();
+        }
+
+        void addChunkCounts(RollbackCounters counters) {
+            items.addAndGet(counters.getItems());
+            blocks.addAndGet(counters.getBlocks());
+            entities.addAndGet(counters.getEntities());
+        }
+
+        void setLegacyKillData(Map<Integer, List<Object>> legacyKillData) {
+            this.legacyKillData = legacyKillData;
+        }
+
+        List<Object> getLegacyKillData(int id) {
+            return legacyKillData.getOrDefault(id, Collections.emptyList());
+        }
+
+        void addEntityCount() {
+            entities.incrementAndGet();
+        }
+
+        void addBlockCount() {
+            blocks.incrementAndGet();
+        }
+
+        String actor() {
+            return userString;
+        }
+
         void addItemCount(int count) {
             items.addAndGet(count);
         }
@@ -1487,12 +1519,11 @@ public final class EntitySpawnRollbackHandler {
         }
 
         boolean isCancelled() {
-            int[] rollbackData = ConfigHandler.rollbackHash.get(userString);
             if (!cancelled.get() && preview == 0 && Consumer.isPersistenceHalted()) {
                 reportFailure("Database persistence is halted", null);
                 return true;
             }
-            return cancelled.get() || (rollbackData != null && rollbackData[3] == 2);
+            return cancelled.get();
         }
 
         void reportFailure(String reason, Work value) {
@@ -1618,30 +1649,10 @@ public final class EntitySpawnRollbackHandler {
             }
             releaseClaim(value.record.getRowId());
             entities.addAndGet(count);
-            items.addAndGet(value.transactionItemCount);
             return true;
         }
 
         private boolean transition(Work value, EntitySpawnData data, int count) {
-            if (!value.complete.compareAndSet(false, true)) {
-                return true;
-            }
-            try {
-                publishTransition(data, value.appliedTransactions);
-                claimedRows.remove(value.record.getRowId());
-                items.addAndGet(value.appliedItemCount);
-                entities.addAndGet(count);
-                return true;
-            }
-            catch (Exception e) {
-                releaseClaim(value.record.getRowId());
-                cancel();
-                ErrorReporter.report(e);
-                return false;
-            }
-        }
-
-        private boolean compositeTransition(Work value, EntitySpawnData data, int count) {
             if (!value.complete.compareAndSet(false, true)) {
                 return true;
             }
@@ -1681,7 +1692,6 @@ public final class EntitySpawnRollbackHandler {
         private boolean transition(NoWorldTransition value) {
             if (preview > 0) {
                 entities.addAndGet(value.count);
-                items.addAndGet(value.transactionItemCount);
                 return true;
             }
             try {
@@ -1812,7 +1822,6 @@ public final class EntitySpawnRollbackHandler {
         private final List<Object> killData;
         private final List<Object[]> transactions;
         private final List<Object[]> appliedTransactions = new ArrayList<>();
-        private final int transactionItemCount;
         private final AtomicBoolean complete = new AtomicBoolean();
         private final AtomicInteger locationRetries = new AtomicInteger();
         private int transactionIndex;
@@ -1833,7 +1842,6 @@ public final class EntitySpawnRollbackHandler {
             this.location = location == null ? null : location.clone();
             this.killData = killData;
             this.transactions = new ArrayList<>(transactions);
-            this.transactionItemCount = itemCount(transactions);
         }
 
         private static Work spawnRemoval(long blockRowId, EntitySpawnRecord record, Location location, List<Object[]> transactions) {

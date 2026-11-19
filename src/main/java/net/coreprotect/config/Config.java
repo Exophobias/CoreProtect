@@ -1,46 +1,34 @@
 package net.coreprotect.config;
 
-import java.io.BufferedOutputStream;
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Pattern;
 
-import org.bukkit.Bukkit;
 import org.bukkit.World;
 
 import net.coreprotect.CoreProtect;
-import net.coreprotect.consumer.Consumer;
-import net.coreprotect.language.Language;
-import net.coreprotect.thread.Scheduler;
-import net.coreprotect.utility.VersionUtils;
 
-public class Config extends Language {
+public class Config {
 
     private static final Map<String, String[]> HEADERS = new HashMap<>();
     private static final Map<String, String> DEFAULT_VALUES = new LinkedHashMap<>();
-    private static final Map<String, Config> CONFIG_BY_WORLD_NAME = new ConcurrentHashMap<>();
+    private record Runtime(Config global, Map<String, Config> worlds, net.coreprotect.language.Language.State language, ConfigHandler.BlacklistState blacklist) {}
+    private static volatile Runtime runtime = new Runtime(new Config(), Map.of(), new net.coreprotect.language.Language.State(), new ConfigHandler.BlacklistState(Map.of(), Map.of()));
     private static final String DEFAULT_FILE_HEADER = "# CoreProtect Config";
-    private static final Pattern NON_DIGIT_PATTERN = Pattern.compile("[^0-9]");
     public static final String LINE_SEPARATOR = "\n";
 
-    private static final Config GLOBAL = new Config();
+    static final java.util.Set<String> BOOLEAN_OPTIONS = java.util.Set.of("enable-ssl", "disable-wal", "hover-events", "database-lock", "log-cancelled-chat", "hopper-filter-meta", "duplicate-suppression", "exclude-tnt", "network-debug", "unknown-logging", "use-mysql");
+    static final java.util.Set<String> INTEGER_OPTIONS = java.util.Set.of("maximum-pool-size", "mysql-port", "clickhouse-port", "clickhouse-consumer-delay", "duckdb-consumer-delay", "duckdb-threads", "default-radius", "max-radius");
+    static Map<String, String> template() { return new LinkedHashMap<>(DEFAULT_VALUES); }
+    static Map<String, String[]> headers() { return HEADERS; }
+
     private final HashMap<String, String> config;
     private Config defaults;
 
     public String DONATION_KEY;
-    public String DATABASE_TYPE;
+    public volatile String DATABASE_TYPE;
     public String CLICKHOUSE_HOST;
     public String CLICKHOUSE_DATABASE;
     public String CLICKHOUSE_USERNAME;
@@ -48,7 +36,7 @@ public class Config extends Language {
     public String DUCKDB_MEMORY_LIMIT;
     public String DUCKDB_MAX_TEMP_DIRECTORY_SIZE;
     public String SQLITE_DATABASE;
-    public String PREFIX;
+    public volatile String PREFIX;
     public String MYSQL_HOST;
     public String MYSQL_DATABASE;
     public String MYSQL_USERNAME;
@@ -66,7 +54,7 @@ public class Config extends Language {
     public boolean DUPLICATE_SUPPRESSION;
     public boolean EXCLUDE_TNT;
     public boolean NETWORK_DEBUG;
-    public boolean MYSQL;
+    public volatile boolean MYSQL;
     public boolean CHECK_UPDATES;
     public boolean ERROR_REPORTING;
     public boolean API_ENABLED;
@@ -112,6 +100,7 @@ public class Config extends Language {
     public int MAXIMUM_POOL_SIZE;
     public int CLICKHOUSE_PORT;
     public int CLICKHOUSE_CONSUMER_DELAY;
+    public int DUCKDB_CONSUMER_DELAY = 2500;
     public int MYSQL_PORT;
     public int DEFAULT_RADIUS;
     public int DUCKDB_THREADS;
@@ -134,6 +123,7 @@ public class Config extends Language {
         DEFAULT_VALUES.put("clickhouse-tls", "false");
         DEFAULT_VALUES.put("duckdb-memory-limit", "512MB");
         DEFAULT_VALUES.put("duckdb-threads", "3");
+        DEFAULT_VALUES.put("duckdb-consumer-delay", "2500");
         DEFAULT_VALUES.put("duckdb-max-temp-directory-size", "10GB");
         DEFAULT_VALUES.put("language", "en");
         DEFAULT_VALUES.put("auto-purge", "false");
@@ -182,10 +172,11 @@ public class Config extends Language {
         DEFAULT_VALUES.put("worldedit", "true");
 
         HEADERS.put("donation-key", new String[] { "# CoreProtect is donationware. Obtain a donation key from coreprotect.net/donate/" });
-        HEADERS.put("database-type", new String[] { "# Database engine used by CoreProtect. Valid values are duckdb, clickhouse, sqlite, and mysql.", "# Run /co reload or restart the server after changing the database engine or connection target." });
+        HEADERS.put("database-type", new String[] { "# Database engine used by CoreProtect. Valid values are duckdb, clickhouse, sqlite, and mysql.", "# Restart the server after changing database engine, connection, prefix or resource settings." });
         HEADERS.put("mysql-host", new String[] { "# Connection settings for MySQL." });
         HEADERS.put("clickhouse-host", new String[] { "# Connection settings for ClickHouse 26.1 or newer.", "# The configured database must already exist; CoreProtect creates its prefixed tables and views.", "# Multiple writers require database-lock disabled, the same version and prefix, separate data directories, and direct connections to one physical server.", "# Keep writer clocks synchronized; a shared prefix is one logical namespace for worlds and players.", "# Do not reassign usernames, and record UUID-bearing logins before UUID-less activity under a changed name.", "# Stop every writer before migration or purge; purge requires database-lock on the remaining server.", "# Replicated, distributed, and load-balanced independent ClickHouse nodes are unsupported." });
         HEADERS.put("duckdb-memory-limit", new String[] { "# Resource limits for the embedded DuckDB database.", "# The memory limit controls DuckDB's buffer manager; the temporary limit caps spill data and is not preallocated." });
+        HEADERS.put("duckdb-consumer-delay", new String[] { "# Minimum delay between DuckDB consumer batches in milliseconds (minimum effective value: 500)." });
         HEADERS.put("language", new String[] { "# If modified, will automatically attempt to translate languages phrases.", "# List of language codes: https://coreprotect.net/languages/" });
         HEADERS.put("auto-purge", new String[] { "# Automatically purge data older than the configured time.", "# Examples: 30d, 12w, 6mo. Set to false to disable." });
         HEADERS.put("check-updates", new String[] { "# If enabled, CoreProtect will check for updates when your server starts up.", "# If an update is available, you'll be notified via your server console.", });
@@ -248,7 +239,8 @@ public class Config extends Language {
         this.DONATION_KEY = this.getString("donation-key");
         this.DATABASE_TYPE = this.getString("database-type");
         this.CLICKHOUSE_HOST = this.getString("clickhouse-host");
-        this.CLICKHOUSE_PORT = this.getInt("clickhouse-port");
+        int clickHousePort = this.getInt("clickhouse-port", 8123);
+        this.CLICKHOUSE_PORT = (clickHousePort < 1 || clickHousePort > 65535) ? 8123 : clickHousePort;
         this.CLICKHOUSE_CONSUMER_DELAY = Math.max(500,
                 this.getInt("clickhouse-consumer-delay", 2500));
         this.CLICKHOUSE_DATABASE = this.getString("clickhouse-database");
@@ -258,13 +250,16 @@ public class Config extends Language {
         this.MYSQL = this.getBoolean("use-mysql");
         this.PREFIX = this.getString("table-prefix");
         this.MYSQL_HOST = this.getString("mysql-host");
-        this.MYSQL_PORT = this.getInt("mysql-port");
+        int mysqlPort = this.getInt("mysql-port", 3306);
+        this.MYSQL_PORT = (mysqlPort < 1 || mysqlPort > 65535) ? 3306 : mysqlPort;
         this.MYSQL_DATABASE = this.getString("mysql-database");
         this.MYSQL_USERNAME = this.getString("mysql-username");
         this.MYSQL_PASSWORD = this.getString("mysql-password");
         this.DUCKDB_MEMORY_LIMIT = this.getString("duckdb-memory-limit");
         this.DUCKDB_THREADS = this.getInt("duckdb-threads", 3);
         this.DUCKDB_MAX_TEMP_DIRECTORY_SIZE = this.getString("duckdb-max-temp-directory-size");
+        this.DUCKDB_CONSUMER_DELAY = Math.max(500,
+                this.getInt("duckdb-consumer-delay", 2500));
         this.SQLITE_DATABASE = this.getString("sqlite-database");
         this.LANGUAGE = this.getString("language");
         this.AUTO_PURGE = this.getString("auto-purge");
@@ -315,12 +310,11 @@ public class Config extends Language {
     }
 
     public static void init() throws IOException {
-        parseConfig(loadFiles(ConfigFile.CONFIG));
-        // pass variables to ConfigFile.parseConfig(ConfigFile.loadFiles());
+        PreparedConfiguration.prepare(CoreProtect.getInstance().getDataFolder().toPath()).activate(false);
     }
 
     public static Config getGlobal() {
-        return GLOBAL;
+        return runtime.global;
     }
 
     // returns a world specific config if it exists, otherwise the global config
@@ -329,7 +323,8 @@ public class Config extends Language {
     }
 
     public static Config getConfig(final String worldName) {
-        return CONFIG_BY_WORLD_NAME.getOrDefault(worldName, GLOBAL);
+        Runtime current = runtime;
+        return current.worlds.getOrDefault(worldName, current.global);
     }
 
     public Config() {
@@ -340,12 +335,9 @@ public class Config extends Language {
         this.defaults = defaults;
     }
 
-    private String get(final String key, final String dfl) {
+    private String get(final String key) {
         String configured = this.config.get(key);
         if (configured == null) {
-            if (dfl != null) {
-                return dfl;
-            }
             if (this.defaults == null) {
                 configured = DEFAULT_VALUES.get(key);
             }
@@ -357,13 +349,13 @@ public class Config extends Language {
     }
 
     private boolean getBoolean(final String key) {
-        final String configured = this.get(key, null);
-        return configured != null && configured.startsWith("t");
+        final String configured = this.get(key);
+        return configured != null && configured.trim().equalsIgnoreCase("true");
     }
 
     private boolean getBoolean(final String key, final boolean dfl) {
-        final String configured = this.get(key, null);
-        return configured == null ? dfl : configured.startsWith("t");
+        final String configured = this.get(key);
+        return configured == null ? dfl : configured.trim().equalsIgnoreCase("true");
     }
 
     private int getInt(final String key) {
@@ -371,19 +363,27 @@ public class Config extends Language {
     }
 
     private int getInt(final String key, final int dfl) {
-        String configured = this.get(key, null);
+        String configured = this.get(key);
 
         if (configured == null) {
             return dfl;
         }
 
-        configured = NON_DIGIT_PATTERN.matcher(configured).replaceAll("");
+        String trimmed = configured.trim();
+        if (trimmed.isEmpty()) {
+            return dfl;
+        }
 
-        return configured.isEmpty() ? dfl : Integer.parseInt(configured);
+        try {
+            return Integer.parseInt(trimmed);
+        }
+        catch (NumberFormatException e) {
+            return dfl;
+        }
     }
 
     private String getString(final String key) {
-        final String configured = this.get(key, null);
+        final String configured = this.get(key);
         return configured == null ? "" : configured;
     }
 
@@ -411,161 +411,31 @@ public class Config extends Language {
         this.readValues();
     }
 
-    private static Map<String, byte[]> loadFiles(String fileName) throws IOException {
-        final CoreProtect plugin = CoreProtect.getInstance();
-        final File configFolder = plugin.getDataFolder();
-        if (!configFolder.exists()) {
-            configFolder.mkdirs();
-        }
-
-        final Map<String, byte[]> map = new HashMap<>();
-        final File globalFile = new File(configFolder, fileName);
-
-        if (globalFile.exists()) {
-            // we always add options to the global config
-            final byte[] data = Files.readAllBytes(globalFile.toPath());
-            map.put("config", data);
-
-            // can't modify GLOBAL, we're likely off-main here
-            final Config temp = new Config();
-            temp.load(new ByteArrayInputStream(data));
-            temp.addMissingOptions(globalFile);
-        }
-        else {
-            final Config temp = new Config();
-            temp.loadDefaults();
-            temp.addMissingOptions(globalFile);
-            map.put("config", Files.readAllBytes(globalFile.toPath()));
-        }
-
-        for (final File worldConfigFile : configFolder.listFiles((File file) -> file.getName().endsWith(".yml"))) {
-            final String name = worldConfigFile.getName();
-            if (name.equals(ConfigFile.CONFIG) || name.equals(ConfigFile.LANGUAGE)) {
-                continue;
-            }
-
-            map.put(name.substring(0, name.length() - ".yml".length()), Files.readAllBytes(worldConfigFile.toPath()));
-        }
-
-        return map;
+    static Config fromValues(Map<String, String> values, Config defaults) {
+        Config prepared = new Config();
+        prepared.setDefaults(defaults);
+        prepared.config.putAll(values);
+        prepared.readValues();
+        return prepared;
     }
 
-    // this should only be called on the main thread
-    private static void parseConfig(final Map<String, byte[]> data) {
-        if (!Bukkit.isPrimaryThread()) {
-            // we call reloads asynchronously
-            // for now this solution is good enough to ensure we only modify on the main thread
-            final CompletableFuture<Void> complete = new CompletableFuture<>();
-            final CompletableFuture<Void> shutdown = Consumer.databaseReloadShutdownSignal();
-
-            Scheduler.runTask(CoreProtect.getInstance(), () -> {
-                if (shutdown.isDone()) {
-                    return;
-                }
-                try {
-                    parseConfig(data);
-                }
-                catch (final Throwable thr) {
-                    if (thr instanceof ThreadDeath) {
-                        throw (ThreadDeath) thr;
-                    }
-                    complete.completeExceptionally(thr);
-                    return;
-                }
-                complete.complete(null);
-            });
-
-            CompletableFuture.anyOf(complete, shutdown).join();
-            if (!complete.isDone()) {
-                complete.cancel(false);
-                throw new CancellationException("Configuration reload cancelled for shutdown");
-            }
-            complete.join();
-            return;
-        }
-
-        // we need to load global first since it is used for config defaults
-        final byte[] defaultData = data.get("config");
-        if (defaultData != null) {
-            try {
-                GLOBAL.load(new ByteArrayInputStream(defaultData));
-            }
-            catch (final IOException ex) {
-                throw new RuntimeException(ex); // shouldn't happen
-            }
-        }
-        else {
-            GLOBAL.loadDefaults();
-        }
-
-        final Map<String, Config> worldConfigs = new HashMap<>();
-        for (final Map.Entry<String, byte[]> entry : data.entrySet()) {
-            final String worldName = entry.getKey();
-            if (worldName.equals("config")) {
-                continue;
-            }
-
-            final byte[] fileData = entry.getValue();
-            final Config config = new Config();
-            config.setDefaults(GLOBAL);
-
-            try {
-                config.load(new ByteArrayInputStream(fileData));
-            }
-            catch (final IOException ex) {
-                throw new RuntimeException(ex); // shouldn't happen
-            }
-
-            worldConfigs.put(worldName, config);
-        }
-
-        // Replace entries instead of clearing first, so a configured world never reads the global config mid reload
-        CONFIG_BY_WORLD_NAME.putAll(worldConfigs);
-        CONFIG_BY_WORLD_NAME.keySet().retainAll(worldConfigs.keySet());
+    public static net.coreprotect.language.Language.State languageState() { return runtime.language; }
+    public static void publishLanguage(net.coreprotect.language.Language.State language) {
+        Runtime current = runtime;
+        runtime = new Runtime(current.global, current.worlds, language, current.blacklist);
+    }
+    static ConfigHandler.BlacklistState blacklistState() { return runtime.blacklist; }
+    static void publish(Config global, Map<String, Config> worlds, net.coreprotect.language.Language.State language, ConfigHandler.BlacklistState blacklist) {
+        runtime = new Runtime(global, Map.copyOf(worlds), language, blacklist);
+        // Retain the existing public compatibility aliases; internal readers use the atomic generation.
+        ConfigHandler.blacklist = blacklist.direct();
+        ConfigHandler.FilteredBlacklist = blacklist.filtered();
     }
 
-    public void addMissingOptions(final File file) throws IOException {
-        final boolean writeHeader = !file.exists() || file.length() == 0;
-        try (final FileOutputStream fout = new FileOutputStream(file, true)) {
-            OutputStreamWriter out = new OutputStreamWriter(new BufferedOutputStream(fout), StandardCharsets.UTF_8);
-            if (writeHeader) {
-                out.append(DEFAULT_FILE_HEADER);
-                out.append(LINE_SEPARATOR);
-            }
-
-            for (final Map.Entry<String, String> entry : DEFAULT_VALUES.entrySet()) {
-                final String key = entry.getKey();
-                String defaultValue = entry.getValue();
-
-                final String configuredValue = this.config.get(key);
-
-                if (configuredValue != null) {
-                    continue;
-                }
-                if (key.equals("auto-purge") && VersionUtils.isCommunityEdition()) {
-                    continue;
-                }
-                if (key.equals("database-type") && !writeHeader) {
-                    defaultValue = this.getBoolean("use-mysql") ? "mysql" : "sqlite";
-                }
-
-                final String[] header = HEADERS.get(key);
-
-                if (header != null) {
-                    out.append(LINE_SEPARATOR);
-                    for (final String headerLine : header) {
-                        out.append(headerLine);
-                        out.append(LINE_SEPARATOR);
-                    }
-                }
-
-                out.append(key);
-                out.append(": ");
-                out.append(defaultValue);
-                out.append(LINE_SEPARATOR);
-            }
-
-            out.close();
+    boolean sameDatabaseSettings(Config candidate) {
+        for (String key : java.util.List.of("database-type", "use-mysql", "table-prefix", "mysql-host", "mysql-port", "mysql-database", "mysql-username", "mysql-password", "clickhouse-host", "clickhouse-port", "clickhouse-database", "clickhouse-username", "clickhouse-password", "clickhouse-tls", "duckdb-memory-limit", "duckdb-threads", "duckdb-max-temp-directory-size", "sqlite-database", "maximum-pool-size", "enable-ssl", "disable-wal", "database-lock")) {
+            if (!java.util.Objects.equals(get(key), candidate.get(key))) return false;
         }
+        return true;
     }
 }

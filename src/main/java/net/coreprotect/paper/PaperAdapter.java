@@ -14,6 +14,7 @@ import org.bukkit.block.Sign;
 import org.bukkit.block.Skull;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Firework;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Villager;
@@ -24,6 +25,7 @@ import org.bukkit.plugin.Plugin;
 
 import net.coreprotect.bukkit.BukkitAdapter;
 import net.coreprotect.config.ConfigHandler;
+import net.coreprotect.utility.SkullProfileUtils;
 
 public class PaperAdapter implements PaperInterface {
 
@@ -39,9 +41,11 @@ public class PaperAdapter implements PaperInterface {
     public static final int PAPER_V1_20 = BukkitAdapter.BUKKIT_V1_20;
     public static final int PAPER_V1_21 = BukkitAdapter.BUKKIT_V1_21;
     public static final int PAPER_V1_21_5 = BukkitAdapter.BUKKIT_V1_21_5;
+    public static final int PAPER_V1_21_11 = BukkitAdapter.BUKKIT_V1_21_11;
     public static final int PAPER_V26_0 = BukkitAdapter.BUKKIT_V26_0;
     public static final int PAPER_V26_1 = BukkitAdapter.BUKKIT_V26_1;
     public static final int PAPER_V26_2 = BukkitAdapter.BUKKIT_V26_2;
+    public static final int PAPER_V26_3 = BukkitAdapter.BUKKIT_V26_3;
 
     public static void loadAdapter() {
         int paperVersion = ConfigHandler.SERVER_VERSION;
@@ -57,7 +61,7 @@ public class PaperAdapter implements PaperInterface {
             PaperAdapter.ADAPTER = new Paper_v26_1();
         }
         else if (paperVersion >= PAPER_V26_0) {
-            PaperAdapter.ADAPTER = new Paper_26_0();
+            PaperAdapter.ADAPTER = new Paper_v26_0();
         }
         else if (paperVersion >= PAPER_V1_20) {
             PaperAdapter.ADAPTER = new Paper_v1_20();
@@ -81,6 +85,11 @@ public class PaperAdapter implements PaperInterface {
     @Override
     public BlockState getBlockState(Block block, boolean useSnapshot) {
         return block.getState();
+    }
+
+    @Override
+    public LivingEntity getFireworkRider(Firework firework) {
+        return BukkitAdapter.ADAPTER.getFireworkRider(firework);
     }
 
     @Override
@@ -144,6 +153,24 @@ public class PaperAdapter implements PaperInterface {
     }
 
     @Override
+    public void scheduleSyncDelayedTask(Plugin plugin, Runnable task, Runnable retiredTask, Object regionData, long delayTicks) {
+    }
+
+    @Override
+    public Object scheduleSyncRepeatingTask(Plugin plugin, Runnable task, Object regionData, long delayTicks, long periodTicks) {
+        return null;
+    }
+
+    @Override
+    public void scheduleAsyncDelayedTask(Plugin plugin, Runnable task, long delayTicks) {
+    }
+
+    @Override
+    public boolean cancelScheduledTask(Object task) {
+        return false;
+    }
+
+    @Override
     public boolean getEntityMeta(LivingEntity entity, List<Object> info) {
         return false;
     }
@@ -155,6 +182,11 @@ public class PaperAdapter implements PaperInterface {
 
     @Override
     public String getSkullOwner(Skull skull) {
+        String owner = BukkitAdapter.ADAPTER == null ? null : BukkitAdapter.ADAPTER.getSkullProfileOwner(skull);
+        if (owner != null) {
+            return owner;
+        }
+
         OfflinePlayer player = skull.getOwningPlayer();
         if (player == null || player.getUniqueId() == null) {
             return null;
@@ -165,19 +197,25 @@ public class PaperAdapter implements PaperInterface {
 
     @Override
     public void setSkullOwner(Skull skull, String owner) {
-        if (owner != null && owner.length() >= 32 && owner.contains("-")) {
-            skull.setOwningPlayer(Bukkit.getOfflinePlayer(UUID.fromString(owner)));
+        UUID uuid = SkullProfileUtils.parseOwnerUuid(owner);
+        if (uuid != null) {
+            skull.setOwningPlayer(Bukkit.getOfflinePlayer(uuid));
+        }
+        else if (BukkitAdapter.ADAPTER != null && SkullProfileUtils.isOwnerName(owner)) {
+            BukkitAdapter.ADAPTER.setSkullProfileOwner(skull, owner);
         }
     }
 
     @Override
     public String getSkullSkin(Skull skull) {
-        return null;
+        return BukkitAdapter.ADAPTER == null ? null : BukkitAdapter.ADAPTER.getSkullSkin(skull);
     }
 
     @Override
     public void setSkullSkin(Skull skull, String skin) {
-        return;
+        if (BukkitAdapter.ADAPTER != null) {
+            BukkitAdapter.ADAPTER.setSkullSkin(skull, skin);
+        }
     }
 
     @Override

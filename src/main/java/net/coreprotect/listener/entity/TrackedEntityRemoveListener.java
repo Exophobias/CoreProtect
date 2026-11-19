@@ -1,12 +1,12 @@
 package net.coreprotect.listener.entity;
 
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.minecart.ExplosiveMinecart;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityRemoveEvent;
 
-import net.coreprotect.consumer.Queue;
 import net.coreprotect.listener.player.EntityInteractionListener;
 import net.coreprotect.listener.player.InventoryChangeListener;
 import net.coreprotect.utility.EntitySpawnTracking;
@@ -16,7 +16,28 @@ public final class TrackedEntityRemoveListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onEntityRemove(EntityRemoveEvent event) {
         Entity entity = event.getEntity();
+        if (entity instanceof ExplosiveMinecart) {
+            ExplosiveMinecart minecart = (ExplosiveMinecart) entity;
+            switch (event.getCause()) {
+                case DEATH:
+                case HIT:
+                    if (VehicleDestroyListener.completeTntRemoval(minecart)) {
+                        return;
+                    }
+                    break;
+                case EXPLODE:
+                    VehicleDestroyListener.logTntExplosion(minecart);
+                    return;
+                default:
+                    VehicleDestroyListener.cancelTntRemoval(minecart);
+                    break;
+            }
+        }
         switch (event.getCause()) {
+            case ENTER_BLOCK:
+                EntitySpawnTracking.handleUnload(entity);
+                return;
+            case TRANSFORMATION:
             case UNLOAD:
                 return;
             case DEATH:
@@ -37,8 +58,7 @@ public final class TrackedEntityRemoveListener implements Listener {
         if (EntitySpawnTracking.isTrackedOrPendingIdentity(entity)) {
             InventoryChangeListener.flushEntityContainer(entity);
             EntityInteractionListener.flushPendingInteractions(entity);
-            Queue.queueEntitySpawnRemoved(entity);
-            EntitySpawnTracking.clearTracking(entity.getUniqueId());
+            EntitySpawnTracking.recordRemoval(entity);
         }
     }
 }

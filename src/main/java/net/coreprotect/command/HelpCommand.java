@@ -22,7 +22,7 @@ public class HelpCommand {
         {"rollback|restore", "cancel", "Cancel your pending preview", "cancel"},
         {"teleport", "teleport <world> <x> <y> <z>", "Teleport to a lookup location", "teleport"},
         {"purge", "purge <params>", "Remove matching old history", "purge"},
-        {"reload", "reload", "Reload operator configuration", "reload"},
+        {"reload", "reload", "Reload settings; database connection changes require restart", "reload"},
         {"status", "status", "Show plugin and database status", "status"},
         {"give", "give <item>", "Give a logging tool", "give"},
         {"consumer", "consumer", "Show the consumer queue", "consumer"},
@@ -32,6 +32,7 @@ public class HelpCommand {
         {"users", "u:<users>", "Filter by users; separate names with commas"},
         {"time", "t:<time>", "Choose an age such as 1d, 2h or 30m"},
         {"radius", "r:<radius>", "Limit the radius; use a world name for a world filter"},
+        {"coordinates", "c:<x,y,z>", "Set the center of a radius using coordinates"},
         {"action", "a:<action>", "Choose a permitted action type"},
         {"include", "i:<include>", "Include matching materials or entities"},
         {"exclude", "e:<exclude>", "Exclude matching materials or entities"},
@@ -88,17 +89,21 @@ public class HelpCommand {
                 + (total > 1 ? " §8(§f" + page + "§8/§f" + total + "§8)" : "") + " §8----------");
     }
 
-    private static void row(CommandSender sender, String command, String description) {
-        Chat.sendMessage(sender, "§a/co " + command + " §8- §7" + description);
+    private static void row(CommandSender sender, String label, String command, String description) {
+        Chat.sendMessage(sender, "§a/" + label + " " + command + " §8- §7" + description);
     }
 
-    private static void footer(CommandSender sender, int page, int total) {
+    private static void footer(CommandSender sender, String label, int page, int total) {
         Chat.sendMessage(sender, page < total
-                ? "§8---------- §a/co help " + (page + 1) + " §7for more §8----------"
+                ? "§8---------- §a/" + label + " help " + (page + 1) + " §7for more §8----------"
                 : "§8----------------------------------------");
     }
 
     protected static void runCommand(CommandSender sender, boolean permission, String[] args) {
+        runCommand(sender, permission, "co", args);
+    }
+
+    protected static void runCommand(CommandSender sender, boolean permission, String label, String[] args) {
         if (!permission || !permitted(sender, "help")) {
             deny(sender);
             return;
@@ -110,6 +115,8 @@ public class HelpCommand {
         if (requested.equals("l")) requested = "lookup";
         if (requested.equals("i") || requested.equals("inspector")) requested = "inspect";
         if (requested.equals("tp")) requested = "teleport";
+        if (requested.equals("c:") || requested.equals("coord:") || requested.equals("coords:") || requested.equals("location:")) requested = "coordinates";
+        if (requested.equals("user") || requested.equals("user:") || requested.equals("users:") || requested.equals("u:")) requested = "users";
         for (String[] entry : STAFF) {
             if (!entry[3].equals(requested)) continue;
             if (!permitted(sender, entry[0])) {
@@ -117,8 +124,8 @@ public class HelpCommand {
                 return;
             }
             header(sender, true, 1, 1);
-            row(sender, entry[1], entry[2]);
-            footer(sender, 1, 1);
+            row(sender, label, entry[1], entry[2]);
+            footer(sender, label, 1, 1);
             return;
         }
         for (String[] parameter : PARAMETERS) {
@@ -136,10 +143,10 @@ public class HelpCommand {
             for (String[] parameter : PARAMETERS) {
                 if (parameter[0].equals("filter") && !textFilter(sender)) continue;
                 if (requested.equals("params") || requested.equals("parameters") || requested.equals(parameter[0])) {
-                    row(sender, query + " " + parameter[1], parameter[2]);
+                    row(sender, label, query + " " + parameter[1], parameter[2]);
                 }
             }
-            footer(sender, 1, 1);
+            footer(sender, label, 1, 1);
             return;
         }
         List<String[]> staff = staff(sender);
@@ -161,14 +168,14 @@ public class HelpCommand {
         page = Math.max(1, Math.min(total, page));
         header(sender, page > 1, page, total);
         if (page == 1) {
-            row(sender, "help [page|topic]", "Show permitted commands and parameters");
+            row(sender, label, "help [page|topic]", "Show permitted commands and parameters");
         } else {
             int offset = (page - 2) * PAGE_SIZE;
             for (int index = offset; index < Math.min(offset + PAGE_SIZE, staff.size()); index++) {
                 String[] entry = staff.get(index);
-                row(sender, entry[1], entry[2]);
+                row(sender, label, entry[1], entry[2]);
             }
         }
-        footer(sender, page, total);
+        footer(sender, label, page, total);
     }
 }

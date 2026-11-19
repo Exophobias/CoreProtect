@@ -11,6 +11,7 @@ import java.util.UUID;
 
 import org.bukkit.Location;
 
+import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.consumer.Queue;
 import net.coreprotect.database.rollback.EntitySpawnRollbackHandler;
 import net.coreprotect.model.entity.EntityContainerRollbackUpdate;
@@ -54,6 +55,9 @@ public final class EntitySpawnUpdateCoordinator {
     public void applied(EntitySpawnData data) {
         if (isLifecycle(data)) {
             appliedLifecycleData.add(data);
+            if (data.getOperation() == EntitySpawnData.Operation.REMOVED) {
+                clearActiveConfirmations(data.getUuid());
+            }
         }
     }
 
@@ -111,9 +115,7 @@ public final class EntitySpawnUpdateCoordinator {
     }
 
     public void verificationMissing(EntitySpawnData data) {
-        UUID uuid = data.getUuid();
-        verificationConfirmations.remove(uuid);
-        missingRows.put(uuid, data.getVerificationEpoch());
+        entityMissing(data.getUuid(), data.getVerificationEpoch());
     }
 
     public void locationFound(EntitySpawnData data) {
@@ -123,9 +125,7 @@ public final class EntitySpawnUpdateCoordinator {
     }
 
     public void locationMissing(EntitySpawnData data) {
-        UUID uuid = data.getUuid();
-        locationConfirmations.remove(uuid);
-        missingRows.put(uuid, data.getVerificationEpoch());
+        entityMissing(data.getUuid(), data.getVerificationEpoch());
     }
 
     public void entityFound(UUID uuid) {
@@ -133,7 +133,17 @@ public final class EntitySpawnUpdateCoordinator {
     }
 
     public void entityMissing(UUID uuid) {
-        missingRows.put(uuid, Long.MIN_VALUE);
+        entityMissing(uuid, Long.MIN_VALUE);
+    }
+
+    private void entityMissing(UUID uuid, long epoch) {
+        clearActiveConfirmations(uuid);
+        missingRows.put(uuid, epoch);
+    }
+
+    private void clearActiveConfirmations(UUID uuid) {
+        locationConfirmations.remove(uuid);
+        verificationConfirmations.remove(uuid);
     }
 
     public void afterCommit(boolean committed) {
@@ -225,8 +235,16 @@ public final class EntitySpawnUpdateCoordinator {
             deferredLifecycleUuids.clear();
             for (Map.Entry<UUID, EntitySpawnData> verification : identityVerifications.entrySet()) {
                 runTrackingConfirmation(() -> {
-                    if (!EntitySpawnTracking.retryPendingDatabaseIdentityVerification(verification.getKey())) {
-                        Queue.queueEntitySpawnUpdateFirst(verification.getValue());
+                    EntitySpawnData data = verification.getValue();
+                    boolean bounded = ConfigHandler.databaseType.isDuckDB();
+                    EntitySpawnData retry = bounded ? data.retryVerification(data.getVerificationEpoch()) : data;
+                    if (retry == null) {
+                        EntitySpawnTracking.abandonDatabaseIdentityVerification(verification.getKey(), data.getVerificationEpoch());
+                        ErrorReporter.report(new IllegalStateException("Dropped entity identity verification after three retries: " + verification.getKey()));
+                    }
+                    else if (!(bounded ? EntitySpawnTracking.retryPendingDatabaseIdentityVerification(verification.getKey(), data)
+                            : EntitySpawnTracking.retryPendingDatabaseIdentityVerification(verification.getKey()))) {
+                        Queue.queueEntitySpawnUpdateFirst(retry);
                     }
                 });
             }
