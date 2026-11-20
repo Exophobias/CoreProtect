@@ -16,8 +16,10 @@ Integrated official `PlayPro/CoreProtect` master `d4716695456885bb098730c9222c1e
   `DuckDbEntityUuidMigrationTest` checks preserved rows/sequence, repeated IDs, idempotence and
   rollback of a failed rebuild. Keep `EntityLookupPredicateTest` and its actual database queries.
 - Preserve the maintained Maven test/profile/property contract. Paper 26.3 build 226 is the
-  compile gate, supporting the checked Development build 226 and Production build 251. The
-  release supplies `-Dproject.branch=patriam`; the canonical builder verifies that marker.
+  compile gate, supporting the checked Development build 226 and Production build 251. Java 25
+  is the default compiler release, including builds where `maven-install` activates. Keep the
+  explicit `paper-26.3` profile/property override surface; CI selects that profile and the shipping
+  branch marker. The release supplies `-Dproject.branch=patriam`; the canonical builder verifies that marker.
   The old `development` marker skipped database migrations and is unsafe for this update. CoreProtect API signatures consumed by Siege remain intact; Siege's Maven
   dependency advances to 25.0.
 
